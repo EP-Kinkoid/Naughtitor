@@ -1,0 +1,46 @@
+{
+  "name": "naughtitor",
+  "version": "1.0.0",
+  "description": "SOX Audit Evidence Collection App",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:renderer": "tsc -p tsconfig.json && node build.mjs",
+    "build": "npm run build:electron && npm run build:renderer",
+    "dev": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.naughtitor.app",
+    "productName": "Naughtitor",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.business"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "@types/archiver": "^7.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/uuid": "^10.0.0",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "archiver": "^7.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "screenshot-desktop": "^1.15.0",
+    "uuid": "^11.0.0"
+  }
+}
