@@ -12,14 +12,20 @@ interface Props {
 export function ControlList({ auditName, controls, selectedControl, onSelect, onRefresh }: Props) {
   const [newId, setNewId] = useState('');
   const [newDesc, setNewDesc] = useState('');
+  const [error, setError] = useState('');
 
   const handleAdd = async () => {
     const id = newId.trim();
     if (!id) return;
-    await window.naughtitor.addControl(auditName, id, newDesc.trim());
-    setNewId('');
-    setNewDesc('');
-    onRefresh();
+    setError('');
+    try {
+      await window.naughtitor.addControl(auditName, id, newDesc.trim());
+      setNewId('');
+      setNewDesc('');
+      onRefresh();
+    } catch (err) {
+      setError((err as Error).message);
+    }
   };
 
   const handleRemove = async (controlId: string, e: React.MouseEvent) => {
@@ -48,6 +54,7 @@ export function ControlList({ auditName, controls, selectedControl, onSelect, on
           onKeyDown={e => e.key === 'Enter' && handleAdd()}
         />
         <button onClick={handleAdd} disabled={!newId.trim()}>Add</button>
+        {error && <p className="error-message">{error}</p>}
       </div>
       <div className="controls">
         {controls.map(c => (

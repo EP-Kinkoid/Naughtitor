@@ -58,16 +58,17 @@ body {
   flex: 1;
 }
 
-input, textarea {
+input, textarea, select {
   background: #16213e;
   border: 1px solid #333;
   color: #e0e0e0;
   padding: 0.5rem 0.75rem;
   border-radius: 4px;
   font-size: 0.9rem;
+  font-family: inherit;
 }
 
-input:focus, textarea:focus {
+input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: #e94560;
 }
@@ -165,13 +166,16 @@ button:disabled {
   padding: 1rem;
 }
 
-/* Control List */
-.control-list {
+/* Control List & Application List */
+.control-list, .application-list {
   padding: 1rem;
-  flex: 1;
 }
 
-.control-list h3 {
+.control-list {
+  border-bottom: 1px solid #333;
+}
+
+.control-list h3, .application-list h3 {
   font-size: 0.95rem;
   margin-bottom: 0.75rem;
   color: #aaa;
@@ -258,6 +262,7 @@ button:disabled {
   align-items: center;
   gap: 1rem;
   margin-bottom: 1rem;
+  flex-wrap: wrap;
 }
 
 .evidence-header h3 {
@@ -269,10 +274,106 @@ button:disabled {
   color: #666;
 }
 
-.capture-btn {
+/* Evidence Actions */
+.evidence-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.action-btn {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.screenshot-btn {
   background: #e94560;
-  padding: 0.5rem 1.25rem;
+}
+
+.query-btn {
+  background: #0f3460;
+}
+
+.query-btn:hover {
+  background: #1a4a80;
+}
+
+.import-btn {
+  background: #2d6a4f;
+}
+
+.import-btn:hover {
+  background: #3a8563;
+}
+
+/* Evidence Requirements */
+.requirements-section {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: #16213e;
+  border-radius: 6px;
+  border: 1px solid #333;
+}
+
+.requirements-section h4 {
+  font-size: 0.95rem;
+  color: #aaa;
+  margin-bottom: 0.75rem;
+}
+
+.add-requirement {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.add-requirement input {
+  flex: 1;
+}
+
+.add-requirement select {
+  width: 120px;
+}
+
+.requirements-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.requirements-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.requirements-list li.fulfilled {
+  opacity: 0.7;
+}
+
+.req-check {
   font-size: 1rem;
+  width: 1.2rem;
+  text-align: center;
+}
+
+.requirements-list li.fulfilled .req-check {
+  color: #2d6a4f;
+}
+
+.req-label {
+  flex: 1;
+}
+
+.req-type-badge {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: #333;
+  color: #aaa;
 }
 
 .evidence-grid {
@@ -281,20 +382,72 @@ button:disabled {
   gap: 1rem;
 }
 
-/* Screenshot Card */
-.screenshot-card {
+/* Evidence Card */
+.evidence-card {
   background: #16213e;
   border: 1px solid #333;
   border-radius: 6px;
   overflow: hidden;
 }
 
-.screenshot-card img {
+.evidence-card img {
   width: 100%;
   height: 200px;
   object-fit: cover;
   display: block;
   cursor: pointer;
+}
+
+.evidence-preview {
+  padding: 1.25rem;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.type-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  align-self: flex-start;
+  text-transform: uppercase;
+}
+
+.db-badge {
+  background: #0f3460;
+  color: #6db3f2;
+}
+
+.file-badge {
+  background: #2d6a4f;
+  color: #95d5b2;
+}
+
+.query-text {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: #aaa;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60px;
+  overflow: hidden;
+}
+
+.row-count {
+  font-size: 0.75rem;
+  color: #6db3f2;
+}
+
+.file-name {
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.file-size {
+  font-size: 0.75rem;
+  color: #888;
 }
 
 .card-info {
@@ -336,6 +489,165 @@ button:disabled {
   align-self: flex-start;
 }
 
+/* DB Query Dialog Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-content {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.25rem;
+}
+
+.modal-header h3 {
+  font-size: 1.2rem;
+}
+
+.db-config {
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: #16213e;
+  border-radius: 6px;
+  border: 1px solid #333;
+}
+
+.config-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.config-row label {
+  font-size: 0.8rem;
+  color: #aaa;
+}
+
+.config-row select, .config-row input {
+  width: 100%;
+}
+
+.config-row.narrow {
+  max-width: 120px;
+}
+
+.config-row-group {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.config-row-group .config-row {
+  flex: 1;
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.test-success {
+  color: #2d6a4f;
+  font-size: 0.85rem;
+}
+
+.test-fail {
+  color: #ff6b6b;
+  font-size: 0.85rem;
+}
+
+.query-section {
+  margin-bottom: 1.25rem;
+}
+
+.query-section label {
+  display: block;
+  font-size: 0.8rem;
+  color: #aaa;
+  margin-bottom: 0.25rem;
+}
+
+.query-section textarea {
+  width: 100%;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  resize: vertical;
+  margin-bottom: 0.75rem;
+}
+
+.query-results {
+  margin-top: 1rem;
+}
+
+.result-summary {
+  font-size: 0.85rem;
+  color: #6db3f2;
+  margin-bottom: 0.5rem;
+}
+
+.results-table-wrapper {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid #333;
+  border-radius: 4px;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.results-table th {
+  background: #0f3460;
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  position: sticky;
+  top: 0;
+  font-weight: 600;
+}
+
+.results-table td {
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid #222;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.results-table tr:hover td {
+  background: #1a2744;
+}
+
+.truncation-note {
+  font-size: 0.75rem;
+  color: #888;
+  padding: 0.5rem;
+  text-align: center;
+}
+
 /* Placeholder */
 .placeholder {
   display: flex;
@@ -350,4 +662,10 @@ button:disabled {
   color: #666;
   font-size: 0.85rem;
   padding: 0.5rem 0;
+}
+
+.error-message {
+  color: #ff6b6b;
+  font-size: 0.85rem;
+  margin-top: 0.25rem;
 }

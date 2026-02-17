@@ -2,6 +2,7 @@ import React from 'react';
 import { useAuditStore } from './store/auditStore';
 import { AuditSelector } from './components/AuditSelector';
 import { ControlList } from './components/ControlList';
+import { ApplicationList } from './components/ApplicationList';
 import { EvidenceViewer } from './components/EvidenceViewer';
 
 export function App() {
@@ -17,6 +18,9 @@ export function App() {
       alert(`Exported to ${result}`);
     }
   };
+
+  const selectedControlMeta = store.auditMeta.controls.find(c => c.id === store.selectedControl);
+  const selectedAppMeta = selectedControlMeta?.applications.find(a => a.id === store.selectedApplication);
 
   return (
     <div className="app-layout">
@@ -35,18 +39,35 @@ export function App() {
           onSelect={store.selectControl}
           onRefresh={store.refreshAudit}
         />
-      </div>
-      <div className="main-content">
-        {store.selectedControl ? (
-          <EvidenceViewer
+        {store.selectedControl && selectedControlMeta && (
+          <ApplicationList
             auditName={store.currentAudit}
             controlId={store.selectedControl}
+            applications={selectedControlMeta.applications}
+            selectedApplication={store.selectedApplication}
+            onSelect={store.selectApplication}
+            onRefresh={store.refreshAudit}
+          />
+        )}
+      </div>
+      <div className="main-content">
+        {store.selectedApplication && selectedAppMeta ? (
+          <EvidenceViewer
+            auditName={store.currentAudit}
+            controlId={store.selectedControl!}
+            appId={store.selectedApplication}
+            application={selectedAppMeta}
             evidence={store.evidence}
             onRefresh={store.refreshEvidence}
+            onAuditRefresh={store.refreshAudit}
           />
         ) : (
           <div className="placeholder">
-            <p>Select a control from the sidebar to view or capture evidence.</p>
+            <p>
+              {!store.selectedControl
+                ? 'Select a control from the sidebar to get started.'
+                : 'Select an application to view or capture evidence.'}
+            </p>
           </div>
         )}
       </div>

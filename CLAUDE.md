@@ -2,9 +2,9 @@
 
 ## Project Summary
 
-Cross-platform (macOS/Windows) Electron desktop app for SOX audit evidence collection. Auditors capture screenshots, organize them by SOX control number, annotate with notes, and export as ZIP.
+Cross-platform (macOS/Windows) Electron desktop app for SOX audit evidence collection. Auditors organize evidence by **Audit → Control → Application**, capturing screenshots, running live database queries, and importing files as evidence.
 
-**Status:** MVP complete. Builds and launches successfully. No tests yet.
+**Status:** Feature-complete. Builds and launches successfully. No tests yet.
 
 ## Tech Stack
 
@@ -14,6 +14,7 @@ Cross-platform (macOS/Windows) Electron desktop app for SOX audit evidence colle
 | UI | React 19 + TypeScript 5.7 (strict mode) |
 | Bundler | esbuild (renderer), tsc (electron main) |
 | Screenshots | `screenshot-desktop` (native, cross-platform) |
+| Databases | `mysql2` (MySQL), `mssql` (MS SQL), `odbc` (Progress OpenEdge) |
 | Export | `archiver` (ZIP) |
 | Packaging | `electron-builder` (DMG on Mac, NSIS on Windows) |
 | State mgmt | React hooks only (`useAuditStore` custom hook) |
@@ -33,38 +34,47 @@ npm run dist             # Create distributable (DMG/NSIS)
 
 ```
 electron/
-  main.ts          Main process: window, 14 IPC handlers, global hotkey
+  main.ts          Main process: IPC handlers, global hotkey (Ctrl+Shift+S)
   preload.ts       Context bridge → window.naughtitor API
   screenshot.ts    screenshot-desktop wrapper
-  types.d.ts       Declaration for screenshot-desktop (no @types available)
+  database.ts      DB connections: MySQL, MSSQL, OpenEdge (ODBC)
+  types.d.ts       Declaration for screenshot-desktop
 src/
-  App.tsx          Root: routes between AuditSelector and main layout
-  index.tsx        React entry point (createRoot)
+  App.tsx          Root: AuditSelector or sidebar + main content layout
+  index.tsx        React entry point
   index.html       Shell with CSP header
   components/
-    AuditSelector  Create/open audits
-    ControlList    Add/remove SOX controls
-    EvidenceViewer Screenshot grid + hotkey listener (Ctrl+Shift+S)
-    CaptureButton  Triggers screenshot capture via IPC
-    ScreenshotCard Displays screenshot with timestamp, notes, delete
+    AuditSelector     Create/open audits
+    ControlList       Add/remove SOX controls
+    ApplicationList   Add/remove applications under a control
+    EvidenceViewer    Evidence grid + requirements checklist + hotkey
+    EvidenceActions   Buttons: Screenshot, DB Query, Import File
+    EvidenceCard      Renders any evidence type (screenshot/query/file)
+    DbQueryDialog     Modal: DB connection config, SQL editor, results table
   store/
-    auditStore.ts  Custom hook: currentAudit, selectedControl, evidence state
+    auditStore.ts  State: currentAudit, selectedControl, selectedApplication, evidence
   types/
-    index.ts       AuditMeta, Control, EvidenceItem, NaughtitorAPI (+ global Window decl)
+    index.ts       All TypeScript types + NaughtitorAPI + global Window decl
   styles/
     global.css     Dark theme, full app styling
 build.mjs          esbuild config + static file copy
 ```
 
-**Build output:** `dist/electron/` (CommonJS) and `dist/renderer/` (IIFE bundle + HTML + CSS)
+**Data hierarchy:** Audit → Control → Application → Evidence Items
 
 **Data storage:**
 ```
 ~/Naughtitor/<audit-name>/
-  audit.json                     # { name, controls[], createdAt }
+  audit.json                              # { name, controls[{ applications[{ evidenceRequirements[] }] }] }
   <control-id>/
-    screenshot-<timestamp>.png   # Screenshot files
-    screenshot-<timestamp>.json  # Note sidecar { note, updatedAt }
+    <app-id>/
+      screenshot-<ts>.png                 # Screenshot files
+      screenshot-<ts>.json                # Note sidecar
+      db-query-<ts>.txt                   # SQL query text
+      db-query-<ts>.csv                   # Query results as CSV
+      db-query-<ts>.note.json             # Note sidecar for query
+      file-<ts>-<original-name>           # Imported file (any type)
+      file-<ts>-<original-name>.json      # Note sidecar for file
 ```
 
 ## Code Style & Conventions
@@ -79,6 +89,7 @@ build.mjs          esbuild config + static file copy
 - **Component props:** Always `interface Props` (not exported)
 - **Exports:** Named exports (`export function App()`)
 - **React:** Functional components + hooks only, no class components
+- **IPC safety:** All user inputs validated via `validateName()`, all JSON reads via `readJson()` with fallback, all audit.json writes serialized via write queue
 - **No linter/formatter configured** (no ESLint, Prettier)
 
 ## Known Bugs
@@ -95,7 +106,7 @@ None currently tracked.
 - [ ] **Code signing** - electron-builder config has no signing setup for macOS/Windows distribution
 - [ ] **Auto-update** - No update mechanism configured
 - [ ] **Linux target** - Only macOS (DMG) and Windows (NSIS) configured; no Linux target
-- [ ] **Accessibility** - Remove button (`x`) lacks `aria-label`; no keyboard navigation for control list
+- [ ] **Accessibility** - Remove button (`x`) lacks `aria-label`; no keyboard navigation
 
 ## Test Scenarios Not Yet Covered
 
@@ -103,25 +114,30 @@ No test framework exists. When added, these scenarios need coverage:
 
 **Electron IPC (unit):**
 - Create audit → creates directory + audit.json
-- Add control → creates subdirectory, updates audit.json
-- Remove control → deletes directory recursively, updates audit.json
-- Capture screenshot → writes PNG to correct control folder
-- Save/read notes → JSON sidecar files
-- Export → creates valid ZIP with correct structure
-- List audits → returns only directories under ~/Naughtitor
-- Duplicate control IDs are rejected (currently silently skipped)
-- Malformed audit.json recovery (readJson fallback)
-- Path traversal attempts rejected by validateName (`../`, special chars)
-- Concurrent add-control calls serialize correctly (write queue)
-- Names with invalid characters throw descriptive errors
+- Add control → creates subdirectory, updates audit.json with `applications: []`
+- Add application → creates subdirectory under control, updates audit.json
+- Capture screenshot → writes PNG to `<control>/<app>/` folder
+- Import file → copies file to evidence dir with sanitized name
+- Run DB query → connects to DB, saves result JSON to evidence dir
+- Test DB connection → validates credentials without saving
+- Save/read notes → JSON sidecar files (different paths per evidence type)
+- Evidence requirements → add/remove in audit.json, fulfilled check
+- Export → creates valid ZIP with nested directory structure
+- Path traversal attempts rejected by validateName
+- Concurrent writes serialize correctly (write queue)
+- Invalid characters in names throw descriptive errors
 
 **React components (unit/integration):**
 - AuditSelector: create new audit, open existing audit
-- ControlList: add control, remove control with confirmation, select control highlights
-- EvidenceViewer: displays screenshots, responds to hotkey
-- ScreenshotCard: add/edit note, delete with confirmation
-- CaptureButton: shows loading state, handles errors
+- ControlList: add/remove control, select highlights
+- ApplicationList: add/remove application, auto-generates safe ID from name
+- EvidenceViewer: displays all evidence types, requirements checklist
+- EvidenceActions: screenshot/query/file buttons with loading states
+- EvidenceCard: renders screenshot vs query vs file differently, note editing
+- DbQueryDialog: connection config form, test connection, run query, results table
 
 **E2E:**
-- Full flow: create audit → add control → capture screenshot → view → annotate → export ZIP
-- Hotkey capture (Ctrl+Shift+S) triggers screenshot when control is selected
+- Full flow: create audit → add control → add application → capture screenshot → annotate → export ZIP
+- DB query flow: configure connection → test → run query → save results as evidence
+- File import flow: open dialog → select file → file copied to evidence dir
+- Hotkey capture (Ctrl+Shift+S) triggers screenshot when application is selected

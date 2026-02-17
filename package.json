@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "@types/archiver": "^7.0.0",
+    "@types/mssql": "^9.1.9",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/uuid": "^10.0.0",
@@ -38,6 +39,9 @@
   },
   "dependencies": {
     "archiver": "^7.0.0",
+    "mssql": "^12.2.0",
+    "mysql2": "^3.17.2",
+    "odbc": "^2.4.9",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "screenshot-desktop": "^1.15.0",

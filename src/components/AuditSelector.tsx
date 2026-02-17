@@ -7,6 +7,7 @@ interface Props {
 export function AuditSelector({ onSelect }: Props) {
   const [audits, setAudits] = useState<string[]>([]);
   const [newName, setNewName] = useState('');
+  const [error, setError] = useState('');
 
   useEffect(() => {
     window.naughtitor.listAudits().then(setAudits);
@@ -15,9 +16,14 @@ export function AuditSelector({ onSelect }: Props) {
   const handleCreate = async () => {
     const name = newName.trim();
     if (!name) return;
-    await window.naughtitor.createAudit(name);
-    setNewName('');
-    onSelect(name);
+    setError('');
+    try {
+      await window.naughtitor.createAudit(name);
+      setNewName('');
+      onSelect(name);
+    } catch (err) {
+      setError((err as Error).message);
+    }
   };
 
   return (
@@ -37,6 +43,7 @@ export function AuditSelector({ onSelect }: Props) {
           />
           <button onClick={handleCreate} disabled={!newName.trim()}>Create</button>
         </div>
+        {error && <p className="error-message">{error}</p>}
       </div>
 
       {audits.length > 0 && (

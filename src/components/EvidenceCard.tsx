@@ -4,32 +4,57 @@ import type { EvidenceItem } from '../types';
 interface Props {
   auditName: string;
   controlId: string;
+  appId: string;
   item: EvidenceItem;
   onDeleted: () => void;
   onNoteUpdated: () => void;
 }
 
-export function ScreenshotCard({ auditName, controlId, item, onDeleted, onNoteUpdated }: Props) {
+export function EvidenceCard({ auditName, controlId, appId, item, onDeleted, onNoteUpdated }: Props) {
   const [editingNote, setEditingNote] = useState(false);
   const [noteText, setNoteText] = useState(item.note);
 
   const handleSaveNote = async () => {
-    await window.naughtitor.saveNote(auditName, controlId, item.filename, noteText);
+    await window.naughtitor.saveNote(auditName, controlId, appId, item.filename, noteText);
     setEditingNote(false);
     onNoteUpdated();
   };
 
   const handleDelete = async () => {
-    if (!confirm('Delete this screenshot?')) return;
-    await window.naughtitor.deleteScreenshot(auditName, controlId, item.filename);
+    const typeLabel = item.type === 'screenshot' ? 'screenshot' : item.type === 'db-query' ? 'query result' : 'file';
+    if (!confirm(`Delete this ${typeLabel}?`)) return;
+    await window.naughtitor.deleteEvidence(auditName, controlId, appId, item.filename);
     onDeleted();
   };
 
   const formattedTime = new Date(item.timestamp).toLocaleString();
 
+  const renderPreview = () => {
+    switch (item.type) {
+      case 'screenshot':
+        return <img src={`file://${item.path}`} alt={item.filename} />;
+      case 'db-query':
+        return (
+          <div className="evidence-preview db-preview">
+            <span className="type-badge db-badge">DB Query</span>
+            <p className="query-text">{item.query}</p>
+            {item.rowCount !== undefined && <span className="row-count">{item.rowCount} rows</span>}
+          </div>
+        );
+      case 'file':
+        return (
+          <div className="evidence-preview file-preview">
+            <span className="type-badge file-badge">File</span>
+            <p className="file-name">{item.originalName || item.filename}</p>
+            {item.fileSize !== undefined && <span className="file-size">{formatSize(item.fileSize)}</span>}
+          </div>
+        );
+    }
+  };
+
   return (
-    <div className="screenshot-card">
-      <img src={`file://${item.path}`} alt={item.filename} />
+    <div className={`evidence-card type-${item.type}`}>
+      {renderPreview()}
       <div className="card-info">
         <span className="timestamp">{formattedTime}</span>
         <div className="card-actions">
@@ -59,4 +84,10 @@ export function ScreenshotCard({ auditName, controlId, item, onDeleted, onNoteUp
       </div>
     </div>
   );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
