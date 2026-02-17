@@ -1,16 +1,73 @@
 import { app, BrowserWindow, ipcMain, dialog, globalShortcut } from 'electron';
 import * as path from 'path';
-import * as fs from 'fs';
+import * as fs from 'fs/promises';
+import { existsSync, createWriteStream } from 'fs';
 import { captureScreenshot } from './screenshot';
 import * as archiver from 'archiver';
 
 const NAUGHTITOR_DIR = path.join(app.getPath('home'), 'Naughtitor');
 
-function ensureDir(dir: string): void {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+// --- Input validation (Bug #1: path traversal) ---
+
+const SAFE_NAME_RE = /^[a-zA-Z0-9 _\-\.]+$/;
+
+function validateName(name: string, label: string): void {
+  if (!name || name.length > 200) {
+    throw new Error(`${label} must be 1-200 characters`);
+  }
+  if (!SAFE_NAME_RE.test(name)) {
+    throw new Error(`${label} contains invalid characters. Use letters, numbers, spaces, hyphens, underscores, and dots only.`);
+  }
+  if (name === '.' || name === '..' || name.includes('..')) {
+    throw new Error(`${label} cannot contain path traversal sequences`);
   }
 }
+
+// --- Safe JSON parsing (Bug #2: unhandled parse errors) ---
+
+async function readJson<T>(filePath: string, fallback: T): Promise<T> {
+  try {
+    const data = await fs.readFile(filePath, 'utf-8');
+    return JSON.parse(data) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeJson(filePath: string, data: unknown): Promise<void> {
+  const tmp = filePath + '.tmp';
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2));
+  await fs.rename(tmp, filePath);
+}
+
+// --- Write queue per audit (Bug #3: race conditions) ---
+
+const writeQueues = new Map<string, Promise<unknown>>();
+
+function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = writeQueues.get(key) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  writeQueues.set(key, next);
+  return next;
+}
+
+// --- Helpers ---
+
+interface AuditMeta {
+  name: string;
+  controls: { id: string; description: string; createdAt: string }[];
+  createdAt: string;
+}
+
+async function ensureDir(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+function auditMetaPath(auditName: string): string {
+  return path.join(NAUGHTITOR_DIR, auditName, 'audit.json');
+}
+
+// --- Window ---
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -44,62 +101,76 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// --- IPC Handlers ---
+// --- IPC Handlers (all async, Bug #4: no more sync I/O) ---
 
 ipcMain.handle('list-audits', async () => {
-  ensureDir(NAUGHTITOR_DIR);
-  const entries = fs.readdirSync(NAUGHTITOR_DIR, { withFileTypes: true });
+  await ensureDir(NAUGHTITOR_DIR);
+  const entries = await fs.readdir(NAUGHTITOR_DIR, { withFileTypes: true });
   return entries.filter(e => e.isDirectory()).map(e => e.name);
 });
 
 ipcMain.handle('create-audit', async (_event, auditName: string) => {
+  validateName(auditName, 'Audit name');
   const auditDir = path.join(NAUGHTITOR_DIR, auditName);
-  ensureDir(auditDir);
-  const metaPath = path.join(auditDir, 'audit.json');
-  if (!fs.existsSync(metaPath)) {
-    fs.writeFileSync(metaPath, JSON.stringify({ name: auditName, controls: [], createdAt: new Date().toISOString() }, null, 2));
+  await ensureDir(auditDir);
+  const metaPath = auditMetaPath(auditName);
+  if (!existsSync(metaPath)) {
+    const meta: AuditMeta = { name: auditName, controls: [], createdAt: new Date().toISOString() };
+    await writeJson(metaPath, meta);
   }
   return auditName;
 });
 
 ipcMain.handle('get-audit', async (_event, auditName: string) => {
-  const metaPath = path.join(NAUGHTITOR_DIR, auditName, 'audit.json');
-  if (!fs.existsSync(metaPath)) return null;
-  return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+  validateName(auditName, 'Audit name');
+  const metaPath = auditMetaPath(auditName);
+  if (!existsSync(metaPath)) return null;
+  return readJson<AuditMeta | null>(metaPath, null);
 });
 
 ipcMain.handle('save-audit', async (_event, auditName: string, data: unknown) => {
-  const metaPath = path.join(NAUGHTITOR_DIR, auditName, 'audit.json');
-  fs.writeFileSync(metaPath, JSON.stringify(data, null, 2));
+  validateName(auditName, 'Audit name');
+  const metaPath = auditMetaPath(auditName);
+  return serialized(auditName, () => writeJson(metaPath, data));
 });
 
 ipcMain.handle('add-control', async (_event, auditName: string, controlId: string, description: string) => {
-  const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
-  ensureDir(controlDir);
-  const metaPath = path.join(NAUGHTITOR_DIR, auditName, 'audit.json');
-  const audit = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-  if (!audit.controls.find((c: { id: string }) => c.id === controlId)) {
-    audit.controls.push({ id: controlId, description, createdAt: new Date().toISOString() });
-    fs.writeFileSync(metaPath, JSON.stringify(audit, null, 2));
-  }
-  return audit;
+  validateName(auditName, 'Audit name');
+  validateName(controlId, 'Control ID');
+  return serialized(auditName, async () => {
+    const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
+    await ensureDir(controlDir);
+    const metaPath = auditMetaPath(auditName);
+    const audit = await readJson<AuditMeta>(metaPath, { name: auditName, controls: [], createdAt: new Date().toISOString() });
+    if (!audit.controls.find(c => c.id === controlId)) {
+      audit.controls.push({ id: controlId, description, createdAt: new Date().toISOString() });
+      await writeJson(metaPath, audit);
+    }
+    return audit;
+  });
 });
 
 ipcMain.handle('remove-control', async (_event, auditName: string, controlId: string) => {
-  const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
-  if (fs.existsSync(controlDir)) {
-    fs.rmSync(controlDir, { recursive: true });
-  }
-  const metaPath = path.join(NAUGHTITOR_DIR, auditName, 'audit.json');
-  const audit = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-  audit.controls = audit.controls.filter((c: { id: string }) => c.id !== controlId);
-  fs.writeFileSync(metaPath, JSON.stringify(audit, null, 2));
-  return audit;
+  validateName(auditName, 'Audit name');
+  validateName(controlId, 'Control ID');
+  return serialized(auditName, async () => {
+    const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
+    if (existsSync(controlDir)) {
+      await fs.rm(controlDir, { recursive: true });
+    }
+    const metaPath = auditMetaPath(auditName);
+    const audit = await readJson<AuditMeta>(metaPath, { name: auditName, controls: [], createdAt: new Date().toISOString() });
+    audit.controls = audit.controls.filter(c => c.id !== controlId);
+    await writeJson(metaPath, audit);
+    return audit;
+  });
 });
 
 ipcMain.handle('capture-screenshot', async (_event, auditName: string, controlId: string) => {
+  validateName(auditName, 'Audit name');
+  validateName(controlId, 'Control ID');
   const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
-  ensureDir(controlDir);
+  await ensureDir(controlDir);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `screenshot-${timestamp}.png`;
   const filepath = path.join(controlDir, filename);
@@ -108,46 +179,58 @@ ipcMain.handle('capture-screenshot', async (_event, auditName: string, controlId
 });
 
 ipcMain.handle('list-evidence', async (_event, auditName: string, controlId: string) => {
+  validateName(auditName, 'Audit name');
+  validateName(controlId, 'Control ID');
   const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
-  if (!fs.existsSync(controlDir)) return [];
-  const files = fs.readdirSync(controlDir).filter(f => f.endsWith('.png')).sort();
-  return files.map(filename => {
+  if (!existsSync(controlDir)) return [];
+  const allFiles = await fs.readdir(controlDir);
+  const pngFiles = allFiles.filter(f => f.endsWith('.png')).sort();
+  const results = [];
+  for (const filename of pngFiles) {
     const notePath = path.join(controlDir, filename.replace('.png', '.json'));
-    let note = '';
-    if (fs.existsSync(notePath)) {
-      note = JSON.parse(fs.readFileSync(notePath, 'utf-8')).note || '';
-    }
-    const stat = fs.statSync(path.join(controlDir, filename));
-    return {
+    const noteData = await readJson<{ note?: string }>(notePath, {});
+    const stat = await fs.stat(path.join(controlDir, filename));
+    results.push({
       filename,
       timestamp: stat.mtime.toISOString(),
-      note,
+      note: noteData.note || '',
       path: path.join(controlDir, filename),
-    };
-  });
+    });
+  }
+  return results;
 });
 
 ipcMain.handle('save-note', async (_event, auditName: string, controlId: string, filename: string, note: string) => {
+  validateName(auditName, 'Audit name');
+  validateName(controlId, 'Control ID');
+  validateName(filename, 'Filename');
   const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
   const notePath = path.join(controlDir, filename.replace('.png', '.json'));
-  fs.writeFileSync(notePath, JSON.stringify({ note, updatedAt: new Date().toISOString() }, null, 2));
+  await writeJson(notePath, { note, updatedAt: new Date().toISOString() });
 });
 
 ipcMain.handle('delete-screenshot', async (_event, auditName: string, controlId: string, filename: string) => {
+  validateName(auditName, 'Audit name');
+  validateName(controlId, 'Control ID');
+  validateName(filename, 'Filename');
   const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
   const filePath = path.join(controlDir, filename);
   const notePath = path.join(controlDir, filename.replace('.png', '.json'));
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  if (fs.existsSync(notePath)) fs.unlinkSync(notePath);
+  try { await fs.unlink(filePath); } catch { /* already gone */ }
+  try { await fs.unlink(notePath); } catch { /* no note file */ }
 });
 
 ipcMain.handle('get-screenshot-path', async (_event, auditName: string, controlId: string, filename: string) => {
+  validateName(auditName, 'Audit name');
+  validateName(controlId, 'Control ID');
+  validateName(filename, 'Filename');
   return path.join(NAUGHTITOR_DIR, auditName, controlId, filename);
 });
 
 ipcMain.handle('export-audit', async (_event, auditName: string) => {
+  validateName(auditName, 'Audit name');
   const auditDir = path.join(NAUGHTITOR_DIR, auditName);
-  if (!fs.existsSync(auditDir)) throw new Error('Audit not found');
+  if (!existsSync(auditDir)) throw new Error('Audit not found');
 
   const result = await dialog.showSaveDialog({
     defaultPath: `${auditName}.zip`,
@@ -157,7 +240,7 @@ ipcMain.handle('export-audit', async (_event, auditName: string) => {
   if (result.canceled || !result.filePath) return null;
 
   return new Promise<string>((resolve, reject) => {
-    const output = fs.createWriteStream(result.filePath!);
+    const output = createWriteStream(result.filePath!);
     const archive = archiver.default('zip', { zlib: { level: 9 } });
 
     output.on('close', () => resolve(result.filePath!));

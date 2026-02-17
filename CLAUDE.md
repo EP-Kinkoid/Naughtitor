@@ -83,15 +83,10 @@ build.mjs          esbuild config + static file copy
 
 ## Known Bugs
 
-1. **Path traversal vulnerability** - Control IDs are not validated. A malicious control ID like `../../etc` could write files outside `~/Naughtitor/`. Need to sanitize to alphanumeric + `-_.` only.
-2. **No JSON parse error handling** - `electron/main.ts` has ~5 bare `JSON.parse()` calls. Corrupted `audit.json` crashes the app. Needs try-catch wrappers.
-3. **Race conditions on audit.json** - No file locking. Concurrent IPC calls (e.g., rapid control add/remove) could corrupt data. Needs a write queue or mutex.
-4. **Sync I/O on main thread** - `fs.readFileSync`/`writeFileSync` calls can block the renderer during large operations. Should migrate to async `fs.promises`.
+None currently tracked.
 
 ## Next TODOs
 
-- [ ] **Input validation** - Sanitize audit names and control IDs (restrict characters, limit length)
-- [ ] **Error handling** - Wrap all JSON.parse and fs operations in try-catch, surface errors to UI
 - [ ] **Tests** - No test framework set up yet. Need:
   - Unit tests for IPC handlers (file operations, JSON read/write)
   - Component tests for React UI
@@ -115,7 +110,10 @@ No test framework exists. When added, these scenarios need coverage:
 - Export → creates valid ZIP with correct structure
 - List audits → returns only directories under ~/Naughtitor
 - Duplicate control IDs are rejected (currently silently skipped)
-- Malformed audit.json recovery
+- Malformed audit.json recovery (readJson fallback)
+- Path traversal attempts rejected by validateName (`../`, special chars)
+- Concurrent add-control calls serialize correctly (write queue)
+- Names with invalid characters throw descriptive errors
 
 **React components (unit/integration):**
 - AuditSelector: create new audit, open existing audit
