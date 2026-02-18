@@ -1,54 +1,61 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('naughtitor', {
-  // Audits
-  listAudits: () => ipcRenderer.invoke('list-audits'),
-  createAudit: (name: string) => ipcRenderer.invoke('create-audit', name),
-  getAudit: (name: string) => ipcRenderer.invoke('get-audit', name),
-  saveAudit: (name: string, data: unknown) => ipcRenderer.invoke('save-audit', name, data),
-
-  // Controls
-  addControl: (auditName: string, controlId: string, description: string) =>
-    ipcRenderer.invoke('add-control', auditName, controlId, description),
-  removeControl: (auditName: string, controlId: string) =>
-    ipcRenderer.invoke('remove-control', auditName, controlId),
+  // Registry
+  getRegistry: () => ipcRenderer.invoke('get-registry'),
+  saveRegistry: (data: unknown) => ipcRenderer.invoke('save-registry', data),
 
   // Applications
-  addApplication: (auditName: string, controlId: string, appId: string, name: string, description: string) =>
-    ipcRenderer.invoke('add-application', auditName, controlId, appId, name, description),
-  removeApplication: (auditName: string, controlId: string, appId: string) =>
-    ipcRenderer.invoke('remove-application', auditName, controlId, appId),
-  saveDbConfig: (auditName: string, controlId: string, appId: string, config: unknown) =>
-    ipcRenderer.invoke('save-db-config', auditName, controlId, appId, config),
+  createApp: (app: unknown) => ipcRenderer.invoke('create-app', app),
+  updateApp: (appId: string, updates: unknown) => ipcRenderer.invoke('update-app', appId, updates),
+  archiveApp: (appId: string) => ipcRenderer.invoke('archive-app', appId),
+  saveAppDbConfig: (appId: string, config: unknown) => ipcRenderer.invoke('save-app-db-config', appId, config),
+
+  // Controls
+  createControl: (id: string, description: string) => ipcRenderer.invoke('create-control', id, description),
+  updateControl: (controlId: string, updates: unknown) => ipcRenderer.invoke('update-control', controlId, updates),
+  archiveControl: (controlId: string) => ipcRenderer.invoke('archive-control', controlId),
+  linkAppToControl: (controlId: string, appId: string) => ipcRenderer.invoke('link-app-to-control', controlId, appId),
+  unlinkAppFromControl: (controlId: string, appId: string) => ipcRenderer.invoke('unlink-app-from-control', controlId, appId),
+
+  // Audits
+  createAudit: (name: string) => ipcRenderer.invoke('create-audit', name),
+  archiveAudit: (auditId: string) => ipcRenderer.invoke('archive-audit', auditId),
+  addAuditControlApp: (auditId: string, controlId: string, appId: string) =>
+    ipcRenderer.invoke('add-audit-control-app', auditId, controlId, appId),
+  removeAuditControlApp: (auditId: string, controlId: string, appId: string) =>
+    ipcRenderer.invoke('remove-audit-control-app', auditId, controlId, appId),
 
   // Evidence requirements
-  addRequirement: (auditName: string, controlId: string, appId: string, label: string, type: string) =>
-    ipcRenderer.invoke('add-requirement', auditName, controlId, appId, label, type),
-  removeRequirement: (auditName: string, controlId: string, appId: string, requirementId: string) =>
-    ipcRenderer.invoke('remove-requirement', auditName, controlId, appId, requirementId),
+  addRequirement: (auditId: string, controlId: string, appId: string, label: string, type: string) =>
+    ipcRenderer.invoke('add-requirement', auditId, controlId, appId, label, type),
+  removeRequirement: (auditId: string, controlId: string, appId: string, requirementId: string) =>
+    ipcRenderer.invoke('remove-requirement', auditId, controlId, appId, requirementId),
 
   // Evidence
-  captureScreenshot: (auditName: string, controlId: string, appId: string) =>
-    ipcRenderer.invoke('capture-screenshot', auditName, controlId, appId),
-  importFile: (auditName: string, controlId: string, appId: string) =>
-    ipcRenderer.invoke('import-file', auditName, controlId, appId),
-  listEvidence: (auditName: string, controlId: string, appId: string) =>
-    ipcRenderer.invoke('list-evidence', auditName, controlId, appId),
-  saveNote: (auditName: string, controlId: string, appId: string, filename: string, note: string) =>
-    ipcRenderer.invoke('save-note', auditName, controlId, appId, filename, note),
-  deleteEvidence: (auditName: string, controlId: string, appId: string, filename: string) =>
-    ipcRenderer.invoke('delete-evidence', auditName, controlId, appId, filename),
-  getEvidencePath: (auditName: string, controlId: string, appId: string, filename: string) =>
-    ipcRenderer.invoke('get-evidence-path', auditName, controlId, appId, filename),
+  captureScreenshot: (auditId: string, controlId: string, appId: string) =>
+    ipcRenderer.invoke('capture-screenshot', auditId, controlId, appId),
+  importFile: (auditId: string, controlId: string, appId: string) =>
+    ipcRenderer.invoke('import-file', auditId, controlId, appId),
+  listEvidence: (auditId: string, controlId: string, appId: string) =>
+    ipcRenderer.invoke('list-evidence', auditId, controlId, appId),
+  saveNote: (auditId: string, controlId: string, appId: string, filename: string, note: string) =>
+    ipcRenderer.invoke('save-note', auditId, controlId, appId, filename, note),
+  archiveEvidence: (auditId: string, controlId: string, appId: string, filename: string) =>
+    ipcRenderer.invoke('archive-evidence', auditId, controlId, appId, filename),
+  getEvidencePath: (auditId: string, controlId: string, appId: string, filename: string) =>
+    ipcRenderer.invoke('get-evidence-path', auditId, controlId, appId, filename),
+  listAllEvidenceForApp: (appId: string) =>
+    ipcRenderer.invoke('list-all-evidence-for-app', appId),
 
   // Database
   testDbConnection: (config: unknown) =>
     ipcRenderer.invoke('test-db-connection', config),
-  runDbQuery: (auditName: string, controlId: string, appId: string, config: unknown, query: string) =>
-    ipcRenderer.invoke('run-db-query', auditName, controlId, appId, config, query),
+  runDbQuery: (auditId: string, controlId: string, appId: string, config: unknown, query: string) =>
+    ipcRenderer.invoke('run-db-query', auditId, controlId, appId, config, query),
 
   // Export
-  exportAudit: (auditName: string) => ipcRenderer.invoke('export-audit', auditName),
+  exportAudit: (auditId: string) => ipcRenderer.invoke('export-audit', auditId),
 
   // Events
   onTriggerCapture: (callback: () => void) => {

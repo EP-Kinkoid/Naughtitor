@@ -1,75 +1,65 @@
-import React from 'react';
-import { useAuditStore } from './store/auditStore';
-import { AuditSelector } from './components/AuditSelector';
-import { ControlList } from './components/ControlList';
-import { ApplicationList } from './components/ApplicationList';
-import { EvidenceViewer } from './components/EvidenceViewer';
+import React, { useState } from 'react';
+import { useRegistryStore } from './store/registryStore';
+import { NavBar, View } from './components/NavBar';
+import { HomeView } from './components/HomeView';
+import { ApplicationsView } from './components/ApplicationsView';
+import { ControlsView } from './components/ControlsView';
+import { AuditsView } from './components/AuditsView';
 
 export function App() {
-  const store = useAuditStore();
+  const store = useRegistryStore();
+  const [view, setView] = useState<View>('home');
 
-  if (!store.currentAudit || !store.auditMeta) {
-    return <AuditSelector onSelect={store.openAudit} />;
+  if (store.loading) {
+    return <div className="placeholder"><p>Loading...</p></div>;
   }
 
-  const handleExport = async () => {
-    const result = await window.naughtitor.exportAudit(store.currentAudit!);
-    if (result) {
-      alert(`Exported to ${result}`);
+  const renderView = () => {
+    switch (view) {
+      case 'home':
+        return <HomeView registry={store.registry} onNavigate={setView} />;
+      case 'applications':
+        return (
+          <ApplicationsView
+            registry={store.registry}
+            onRefreshRegistry={store.refresh}
+            createApp={store.createApp}
+            updateApp={store.updateApp}
+            archiveApp={store.archiveApp}
+            saveAppDbConfig={store.saveAppDbConfig}
+          />
+        );
+      case 'controls':
+        return (
+          <ControlsView
+            registry={store.registry}
+            onRefreshRegistry={store.refresh}
+            createControl={store.createControl}
+            updateControl={store.updateControl}
+            archiveControl={store.archiveControl}
+            linkAppToControl={store.linkAppToControl}
+            unlinkAppFromControl={store.unlinkAppFromControl}
+          />
+        );
+      case 'audits':
+        return (
+          <AuditsView
+            registry={store.registry}
+            onRefreshRegistry={store.refresh}
+            createAudit={store.createAudit}
+            archiveAudit={store.archiveAudit}
+            addAuditControlApp={store.addAuditControlApp}
+            removeAuditControlApp={store.removeAuditControlApp}
+          />
+        );
     }
   };
 
-  const selectedControlMeta = store.auditMeta.controls.find(c => c.id === store.selectedControl);
-  const selectedAppMeta = selectedControlMeta?.applications.find(a => a.id === store.selectedApplication);
-
   return (
-    <div className="app-layout">
-      <div className="sidebar">
-        <div className="sidebar-header">
-          <h2>{store.auditMeta.name}</h2>
-          <div className="sidebar-actions">
-            <button className="small-btn" onClick={handleExport}>Export ZIP</button>
-            <button className="small-btn" onClick={store.closeAudit}>Close</button>
-          </div>
-        </div>
-        <ControlList
-          auditName={store.currentAudit}
-          controls={store.auditMeta.controls}
-          selectedControl={store.selectedControl}
-          onSelect={store.selectControl}
-          onRefresh={store.refreshAudit}
-        />
-        {store.selectedControl && selectedControlMeta && (
-          <ApplicationList
-            auditName={store.currentAudit}
-            controlId={store.selectedControl}
-            applications={selectedControlMeta.applications}
-            selectedApplication={store.selectedApplication}
-            onSelect={store.selectApplication}
-            onRefresh={store.refreshAudit}
-          />
-        )}
-      </div>
-      <div className="main-content">
-        {store.selectedApplication && selectedAppMeta ? (
-          <EvidenceViewer
-            auditName={store.currentAudit}
-            controlId={store.selectedControl!}
-            appId={store.selectedApplication}
-            application={selectedAppMeta}
-            evidence={store.evidence}
-            onRefresh={store.refreshEvidence}
-            onAuditRefresh={store.refreshAudit}
-          />
-        ) : (
-          <div className="placeholder">
-            <p>
-              {!store.selectedControl
-                ? 'Select a control from the sidebar to get started.'
-                : 'Select an application to view or capture evidence.'}
-            </p>
-          </div>
-        )}
+    <div className="app-shell">
+      <NavBar currentView={view} onNavigate={setView} />
+      <div className="app-content">
+        {renderView()}
       </div>
     </div>
   );

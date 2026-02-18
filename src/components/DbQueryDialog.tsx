@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import type { DbConnectionConfig, DbQueryResult } from '../types';
 
 interface Props {
-  auditName: string;
+  auditId: string;
   controlId: string;
   appId: string;
   initialConfig?: DbConnectionConfig;
@@ -25,7 +25,7 @@ const DEFAULT_PORTS: Record<string, number> = {
   odbc: 20931,
 };
 
-export function DbQueryDialog({ auditName, controlId, appId, initialConfig, onClose, onSaved }: Props) {
+export function DbQueryDialog({ auditId, controlId, appId, initialConfig, onClose, onSaved }: Props) {
   const [config, setConfig] = useState<DbConnectionConfig>(initialConfig || DEFAULT_CONFIG);
   const [query, setQuery] = useState('');
   const [testing, setTesting] = useState(false);
@@ -64,10 +64,9 @@ export function DbQueryDialog({ auditName, controlId, appId, initialConfig, onCl
     setError('');
     setResult(null);
     try {
-      const res = await window.naughtitor.runDbQuery(auditName, controlId, appId, config, query);
+      const res = await window.naughtitor.runDbQuery(auditId, controlId, appId, config, query);
       setResult(res.result);
-      // Save the DB config on the application for future use
-      await window.naughtitor.saveDbConfig(auditName, controlId, appId, config);
+      await window.naughtitor.saveAppDbConfig(appId, config);
       onSaved();
     } catch (err) {
       setError((err as Error).message);

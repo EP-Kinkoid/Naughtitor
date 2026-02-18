@@ -1,42 +1,43 @@
 import React, { useState, useEffect } from 'react';
-import type { EvidenceItem, EvidenceRequirement, EvidenceType, Application } from '../types';
+import type { EvidenceItem, EvidenceRequirement, EvidenceType, AppRecord } from '../types';
 import { EvidenceActions } from './EvidenceActions';
 import { EvidenceCard } from './EvidenceCard';
 import { DbQueryDialog } from './DbQueryDialog';
 
 interface Props {
-  auditName: string;
+  auditId: string;
   controlId: string;
   appId: string;
-  application: Application;
+  appRecord: AppRecord;
+  requirements: EvidenceRequirement[];
   evidence: EvidenceItem[];
-  onRefresh: () => void;
-  onAuditRefresh: () => void;
+  onRefreshEvidence: () => void;
+  onRefreshRegistry: () => void;
 }
 
-export function EvidenceViewer({ auditName, controlId, appId, application, evidence, onRefresh, onAuditRefresh }: Props) {
+export function EvidenceViewer({ auditId, controlId, appId, appRecord, requirements, evidence, onRefreshEvidence, onRefreshRegistry }: Props) {
   const [showDbDialog, setShowDbDialog] = useState(false);
   const [reqLabel, setReqLabel] = useState('');
   const [reqType, setReqType] = useState<EvidenceType>('screenshot');
 
   useEffect(() => {
     const cleanup = window.naughtitor.onTriggerCapture(async () => {
-      await window.naughtitor.captureScreenshot(auditName, controlId, appId);
-      onRefresh();
+      await window.naughtitor.captureScreenshot(auditId, controlId, appId);
+      onRefreshEvidence();
     });
     return cleanup;
-  }, [auditName, controlId, appId, onRefresh]);
+  }, [auditId, controlId, appId, onRefreshEvidence]);
 
   const handleAddRequirement = async () => {
     if (!reqLabel.trim()) return;
-    await window.naughtitor.addRequirement(auditName, controlId, appId, reqLabel.trim(), reqType);
+    await window.naughtitor.addRequirement(auditId, controlId, appId, reqLabel.trim(), reqType);
     setReqLabel('');
-    onAuditRefresh();
+    onRefreshRegistry();
   };
 
   const handleRemoveRequirement = async (reqId: string) => {
-    await window.naughtitor.removeRequirement(auditName, controlId, appId, reqId);
-    onAuditRefresh();
+    await window.naughtitor.removeRequirement(auditId, controlId, appId, reqId);
+    onRefreshRegistry();
   };
 
   const isFulfilled = (req: EvidenceRequirement) => {
@@ -46,18 +47,17 @@ export function EvidenceViewer({ auditName, controlId, appId, application, evide
   return (
     <div className="evidence-viewer">
       <div className="evidence-header">
-        <h3>{application.name}</h3>
+        <h3>{appRecord.name}</h3>
         <EvidenceActions
-          auditName={auditName}
+          auditId={auditId}
           controlId={controlId}
           appId={appId}
-          onCaptured={onRefresh}
+          onCaptured={onRefreshEvidence}
           onQueryClick={() => setShowDbDialog(true)}
         />
         <span className="hotkey-hint">Ctrl+Shift+S</span>
       </div>
 
-      {/* Evidence Requirements Checklist */}
       <div className="requirements-section">
         <h4>Evidence Checklist</h4>
         <div className="add-requirement">
@@ -75,9 +75,9 @@ export function EvidenceViewer({ auditName, controlId, appId, application, evide
           </select>
           <button onClick={handleAddRequirement} disabled={!reqLabel.trim()}>Add</button>
         </div>
-        {application.evidenceRequirements.length > 0 && (
+        {requirements.length > 0 && (
           <ul className="requirements-list">
-            {application.evidenceRequirements.map(req => (
+            {requirements.map(req => (
               <li key={req.id} className={isFulfilled(req) ? 'fulfilled' : ''}>
                 <span className="req-check">{isFulfilled(req) ? '\u2713' : '\u25CB'}</span>
                 <span className="req-label">{req.label}</span>
@@ -89,17 +89,16 @@ export function EvidenceViewer({ auditName, controlId, appId, application, evide
         )}
       </div>
 
-      {/* Evidence Grid */}
       <div className="evidence-grid">
         {evidence.map(item => (
           <EvidenceCard
             key={item.filename}
-            auditName={auditName}
+            auditId={auditId}
             controlId={controlId}
             appId={appId}
             item={item}
-            onDeleted={onRefresh}
-            onNoteUpdated={onRefresh}
+            onArchived={onRefreshEvidence}
+            onNoteUpdated={onRefreshEvidence}
           />
         ))}
         {evidence.length === 0 && (
@@ -109,12 +108,12 @@ export function EvidenceViewer({ auditName, controlId, appId, application, evide
 
       {showDbDialog && (
         <DbQueryDialog
-          auditName={auditName}
+          auditId={auditId}
           controlId={controlId}
           appId={appId}
-          initialConfig={application.dbConfig}
+          initialConfig={appRecord.dbConfig}
           onClose={() => setShowDbDialog(false)}
-          onSaved={() => { onRefresh(); onAuditRefresh(); }}
+          onSaved={() => { onRefreshEvidence(); onRefreshRegistry(); }}
         />
       )}
     </div>

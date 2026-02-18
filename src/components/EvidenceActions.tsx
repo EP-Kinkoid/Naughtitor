@@ -1,21 +1,21 @@
 import React, { useState } from 'react';
 
 interface Props {
-  auditName: string;
+  auditId: string;
   controlId: string;
   appId: string;
   onCaptured: () => void;
   onQueryClick: () => void;
 }
 
-export function EvidenceActions({ auditName, controlId, appId, onCaptured, onQueryClick }: Props) {
+export function EvidenceActions({ auditId, controlId, appId, onCaptured, onQueryClick }: Props) {
   const [capturing, setCapturing] = useState(false);
   const [importing, setImporting] = useState(false);
 
   const handleScreenshot = async () => {
     setCapturing(true);
     try {
-      await window.naughtitor.captureScreenshot(auditName, controlId, appId);
+      await window.naughtitor.captureScreenshot(auditId, controlId, appId);
       onCaptured();
     } catch (err) {
       alert('Screenshot capture failed: ' + (err as Error).message);
@@ -27,7 +27,7 @@ export function EvidenceActions({ auditName, controlId, appId, onCaptured, onQue
   const handleImportFile = async () => {
     setImporting(true);
     try {
-      const result = await window.naughtitor.importFile(auditName, controlId, appId);
+      const result = await window.naughtitor.importFile(auditId, controlId, appId);
       if (result) onCaptured();
     } catch (err) {
       alert('File import failed: ' + (err as Error).message);

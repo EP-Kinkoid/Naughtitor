@@ -2,29 +2,29 @@ import React, { useState } from 'react';
 import type { EvidenceItem } from '../types';
 
 interface Props {
-  auditName: string;
+  auditId: string;
   controlId: string;
   appId: string;
   item: EvidenceItem;
-  onDeleted: () => void;
+  onArchived: () => void;
   onNoteUpdated: () => void;
 }
 
-export function EvidenceCard({ auditName, controlId, appId, item, onDeleted, onNoteUpdated }: Props) {
+export function EvidenceCard({ auditId, controlId, appId, item, onArchived, onNoteUpdated }: Props) {
   const [editingNote, setEditingNote] = useState(false);
   const [noteText, setNoteText] = useState(item.note);
 
   const handleSaveNote = async () => {
-    await window.naughtitor.saveNote(auditName, controlId, appId, item.filename, noteText);
+    await window.naughtitor.saveNote(auditId, controlId, appId, item.filename, noteText);
     setEditingNote(false);
     onNoteUpdated();
   };
 
-  const handleDelete = async () => {
+  const handleArchive = async () => {
     const typeLabel = item.type === 'screenshot' ? 'screenshot' : item.type === 'db-query' ? 'query result' : 'file';
-    if (!confirm(`Delete this ${typeLabel}?`)) return;
-    await window.naughtitor.deleteEvidence(auditName, controlId, appId, item.filename);
-    onDeleted();
+    if (!confirm(`Archive this ${typeLabel}?`)) return;
+    await window.naughtitor.archiveEvidence(auditId, controlId, appId, item.filename);
+    onArchived();
   };
 
   const formattedTime = new Date(item.timestamp).toLocaleString();
@@ -79,7 +79,7 @@ export function EvidenceCard({ auditName, controlId, appId, item, onDeleted, onN
               </button>
             </>
           )}
-          <button className="small-btn danger" onClick={handleDelete}>Delete</button>
+          <button className="small-btn danger" onClick={handleArchive}>Archive</button>
         </div>
       </div>
     </div>

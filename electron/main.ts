@@ -7,6 +7,8 @@ import { testConnection, runQuery } from './database';
 import * as archiver from 'archiver';
 
 const NAUGHTITOR_DIR = path.join(app.getPath('home'), 'Naughtitor');
+const REGISTRY_PATH = path.join(NAUGHTITOR_DIR, 'registry.json');
+const EVIDENCE_DIR = path.join(NAUGHTITOR_DIR, 'evidence');
 
 // --- Input validation ---
 
@@ -41,7 +43,7 @@ async function writeJson(filePath: string, data: unknown): Promise<void> {
   await fs.rename(tmp, filePath);
 }
 
-// --- Write queue per audit ---
+// --- Write queue (single key for registry) ---
 
 const writeQueues = new Map<string, Promise<unknown>>();
 
@@ -52,7 +54,7 @@ function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-// --- Types ---
+// --- Types (local mirror for main process) ---
 
 interface EvidenceRequirement {
   id: string;
@@ -69,19 +71,48 @@ interface DbConnectionConfig {
   password: string;
 }
 
-interface Application {
+interface AppRecord {
   id: string;
   name: string;
   description: string;
+  userBase: string;
+  authMethod: string;
+  authMethodOther: string;
+  authorizationMethod: string;
+  provisioningProcess: string;
+  environment: string;
+  environmentOther: string;
   dbConfig?: DbConnectionConfig;
-  evidenceRequirements: EvidenceRequirement[];
   createdAt: string;
+  archived: boolean;
 }
 
-interface AuditMeta {
-  name: string;
-  controls: { id: string; description: string; applications: Application[]; createdAt: string }[];
+interface ControlRecord {
+  id: string;
+  description: string;
+  appIds: string[];
   createdAt: string;
+  archived: boolean;
+}
+
+interface AuditControlApp {
+  controlId: string;
+  appId: string;
+  evidenceRequirements: EvidenceRequirement[];
+}
+
+interface AuditRecord {
+  id: string;
+  name: string;
+  controlApps: AuditControlApp[];
+  createdAt: string;
+  archived: boolean;
+}
+
+interface Registry {
+  applications: AppRecord[];
+  controls: ControlRecord[];
+  audits: AuditRecord[];
 }
 
 // --- Path helpers ---
@@ -90,25 +121,26 @@ async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
-function auditMetaPath(auditName: string): string {
-  return path.join(NAUGHTITOR_DIR, auditName, 'audit.json');
+function evidenceDir(auditId: string, controlId: string, appId: string): string {
+  return path.join(EVIDENCE_DIR, auditId, controlId, appId);
 }
 
-function evidenceDir(auditName: string, controlId: string, appId: string): string {
-  return path.join(NAUGHTITOR_DIR, auditName, controlId, appId);
+function emptyRegistry(): Registry {
+  return { applications: [], controls: [], audits: [] };
 }
 
-function emptyAudit(name: string): AuditMeta {
-  return { name, controls: [], createdAt: new Date().toISOString() };
+async function loadRegistry(): Promise<Registry> {
+  await ensureDir(NAUGHTITOR_DIR);
+  return readJson<Registry>(REGISTRY_PATH, emptyRegistry());
 }
 
-function findControl(audit: AuditMeta, controlId: string) {
-  return audit.controls.find(c => c.id === controlId);
+async function saveRegistry(reg: Registry): Promise<void> {
+  await ensureDir(NAUGHTITOR_DIR);
+  await writeJson(REGISTRY_PATH, reg);
 }
 
-function findApp(audit: AuditMeta, controlId: string, appId: string) {
-  const control = findControl(audit, controlId);
-  return control?.applications.find(a => a.id === appId);
+function slugify(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
 }
 
 function csvEscape(value: string): string {
@@ -150,121 +182,212 @@ app.on('window-all-closed', () => {
 });
 
 // =====================
-// IPC Handlers - Audits
+// IPC Handlers - Registry
 // =====================
 
-ipcMain.handle('list-audits', async () => {
-  await ensureDir(NAUGHTITOR_DIR);
-  const entries = await fs.readdir(NAUGHTITOR_DIR, { withFileTypes: true });
-  return entries.filter(e => e.isDirectory()).map(e => e.name);
+ipcMain.handle('get-registry', async () => {
+  return loadRegistry();
 });
 
-ipcMain.handle('create-audit', async (_event, auditName: string) => {
-  validateName(auditName, 'Audit name');
-  await ensureDir(path.join(NAUGHTITOR_DIR, auditName));
-  const metaPath = auditMetaPath(auditName);
-  if (!existsSync(metaPath)) {
-    await writeJson(metaPath, emptyAudit(auditName));
-  }
-  return auditName;
+ipcMain.handle('save-registry', async (_event, data: Registry) => {
+  return serialized('registry', async () => {
+    await saveRegistry(data);
+  });
 });
 
-ipcMain.handle('get-audit', async (_event, auditName: string) => {
-  validateName(auditName, 'Audit name');
-  const metaPath = auditMetaPath(auditName);
-  if (!existsSync(metaPath)) return null;
-  return readJson<AuditMeta | null>(metaPath, null);
+// =====================
+// IPC Handlers - Applications
+// =====================
+
+ipcMain.handle('create-app', async (_event, appData: AppRecord) => {
+  validateName(appData.id, 'Application ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    if (reg.applications.some(a => a.id === appData.id)) {
+      throw new Error(`Application "${appData.id}" already exists`);
+    }
+    reg.applications.push(appData);
+    await saveRegistry(reg);
+    return reg;
+  });
 });
 
-ipcMain.handle('save-audit', async (_event, auditName: string, data: unknown) => {
-  validateName(auditName, 'Audit name');
-  return serialized(auditName, () => writeJson(auditMetaPath(auditName), data));
+ipcMain.handle('update-app', async (_event, appId: string, updates: Partial<AppRecord>) => {
+  validateName(appId, 'Application ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const app = reg.applications.find(a => a.id === appId);
+    if (!app) throw new Error(`Application "${appId}" not found`);
+    Object.assign(app, updates);
+    await saveRegistry(reg);
+    return reg;
+  });
+});
+
+ipcMain.handle('archive-app', async (_event, appId: string) => {
+  validateName(appId, 'Application ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const app = reg.applications.find(a => a.id === appId);
+    if (!app) throw new Error(`Application "${appId}" not found`);
+    app.archived = true;
+    await saveRegistry(reg);
+    return reg;
+  });
+});
+
+ipcMain.handle('save-app-db-config', async (_event, appId: string, config: DbConnectionConfig) => {
+  validateName(appId, 'Application ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const app = reg.applications.find(a => a.id === appId);
+    if (!app) throw new Error(`Application "${appId}" not found`);
+    app.dbConfig = config;
+    await saveRegistry(reg);
+    return reg;
+  });
 });
 
 // =======================
 // IPC Handlers - Controls
 // =======================
 
-ipcMain.handle('add-control', async (_event, auditName: string, controlId: string, description: string) => {
-  validateName(auditName, 'Audit name');
-  validateName(controlId, 'Control ID');
-  return serialized(auditName, async () => {
-    await ensureDir(path.join(NAUGHTITOR_DIR, auditName, controlId));
-    const metaPath = auditMetaPath(auditName);
-    const audit = await readJson<AuditMeta>(metaPath, emptyAudit(auditName));
-    if (!findControl(audit, controlId)) {
-      audit.controls.push({ id: controlId, description, applications: [], createdAt: new Date().toISOString() });
-      await writeJson(metaPath, audit);
+ipcMain.handle('create-control', async (_event, id: string, description: string) => {
+  validateName(id, 'Control ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    if (reg.controls.some(c => c.id === id)) {
+      throw new Error(`Control "${id}" already exists`);
     }
-    return audit;
+    reg.controls.push({
+      id,
+      description,
+      appIds: [],
+      createdAt: new Date().toISOString(),
+      archived: false,
+    });
+    await saveRegistry(reg);
+    return reg;
   });
 });
 
-ipcMain.handle('remove-control', async (_event, auditName: string, controlId: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('update-control', async (_event, controlId: string, updates: Partial<ControlRecord>) => {
   validateName(controlId, 'Control ID');
-  return serialized(auditName, async () => {
-    const controlDir = path.join(NAUGHTITOR_DIR, auditName, controlId);
-    if (existsSync(controlDir)) await fs.rm(controlDir, { recursive: true });
-    const metaPath = auditMetaPath(auditName);
-    const audit = await readJson<AuditMeta>(metaPath, emptyAudit(auditName));
-    audit.controls = audit.controls.filter(c => c.id !== controlId);
-    await writeJson(metaPath, audit);
-    return audit;
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const control = reg.controls.find(c => c.id === controlId);
+    if (!control) throw new Error(`Control "${controlId}" not found`);
+    Object.assign(control, updates);
+    await saveRegistry(reg);
+    return reg;
+  });
+});
+
+ipcMain.handle('archive-control', async (_event, controlId: string) => {
+  validateName(controlId, 'Control ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const control = reg.controls.find(c => c.id === controlId);
+    if (!control) throw new Error(`Control "${controlId}" not found`);
+    control.archived = true;
+    await saveRegistry(reg);
+    return reg;
+  });
+});
+
+ipcMain.handle('link-app-to-control', async (_event, controlId: string, appId: string) => {
+  validateName(controlId, 'Control ID');
+  validateName(appId, 'Application ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const control = reg.controls.find(c => c.id === controlId);
+    if (!control) throw new Error(`Control "${controlId}" not found`);
+    if (!reg.applications.some(a => a.id === appId)) throw new Error(`Application "${appId}" not found`);
+    if (!control.appIds.includes(appId)) {
+      control.appIds.push(appId);
+      await saveRegistry(reg);
+    }
+    return reg;
+  });
+});
+
+ipcMain.handle('unlink-app-from-control', async (_event, controlId: string, appId: string) => {
+  validateName(controlId, 'Control ID');
+  validateName(appId, 'Application ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const control = reg.controls.find(c => c.id === controlId);
+    if (!control) throw new Error(`Control "${controlId}" not found`);
+    control.appIds = control.appIds.filter(id => id !== appId);
+    await saveRegistry(reg);
+    return reg;
   });
 });
 
 // ============================
-// IPC Handlers - Applications
+// IPC Handlers - Audits
 // ============================
 
-ipcMain.handle('add-application', async (_event, auditName: string, controlId: string, appId: string, name: string, description: string) => {
-  validateName(auditName, 'Audit name');
-  validateName(controlId, 'Control ID');
-  validateName(appId, 'Application ID');
-  return serialized(auditName, async () => {
-    await ensureDir(evidenceDir(auditName, controlId, appId));
-    const metaPath = auditMetaPath(auditName);
-    const audit = await readJson<AuditMeta>(metaPath, emptyAudit(auditName));
-    const control = findControl(audit, controlId);
-    if (!control) throw new Error(`Control ${controlId} not found`);
-    if (!findApp(audit, controlId, appId)) {
-      control.applications.push({ id: appId, name, description, evidenceRequirements: [], createdAt: new Date().toISOString() });
-      await writeJson(metaPath, audit);
+ipcMain.handle('create-audit', async (_event, name: string) => {
+  validateName(name, 'Audit name');
+  const id = slugify(name);
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    if (reg.audits.some(a => a.id === id)) {
+      throw new Error(`Audit "${name}" already exists`);
     }
-    return audit;
+    reg.audits.push({
+      id,
+      name,
+      controlApps: [],
+      createdAt: new Date().toISOString(),
+      archived: false,
+    });
+    await saveRegistry(reg);
+    return reg;
   });
 });
 
-ipcMain.handle('remove-application', async (_event, auditName: string, controlId: string, appId: string) => {
-  validateName(auditName, 'Audit name');
-  validateName(controlId, 'Control ID');
-  validateName(appId, 'Application ID');
-  return serialized(auditName, async () => {
-    const appDir = evidenceDir(auditName, controlId, appId);
-    if (existsSync(appDir)) await fs.rm(appDir, { recursive: true });
-    const metaPath = auditMetaPath(auditName);
-    const audit = await readJson<AuditMeta>(metaPath, emptyAudit(auditName));
-    const control = findControl(audit, controlId);
-    if (control) {
-      control.applications = control.applications.filter(a => a.id !== appId);
-      await writeJson(metaPath, audit);
-    }
-    return audit;
+ipcMain.handle('archive-audit', async (_event, auditId: string) => {
+  validateName(auditId, 'Audit ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const audit = reg.audits.find(a => a.id === auditId);
+    if (!audit) throw new Error(`Audit "${auditId}" not found`);
+    audit.archived = true;
+    await saveRegistry(reg);
+    return reg;
   });
 });
 
-ipcMain.handle('save-db-config', async (_event, auditName: string, controlId: string, appId: string, config: DbConnectionConfig) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('add-audit-control-app', async (_event, auditId: string, controlId: string, appId: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
-  return serialized(auditName, async () => {
-    const metaPath = auditMetaPath(auditName);
-    const audit = await readJson<AuditMeta>(metaPath, emptyAudit(auditName));
-    const application = findApp(audit, controlId, appId);
-    if (!application) throw new Error(`Application ${appId} not found`);
-    application.dbConfig = config;
-    await writeJson(metaPath, audit);
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const audit = reg.audits.find(a => a.id === auditId);
+    if (!audit) throw new Error(`Audit "${auditId}" not found`);
+    const exists = audit.controlApps.some(ca => ca.controlId === controlId && ca.appId === appId);
+    if (!exists) {
+      audit.controlApps.push({ controlId, appId, evidenceRequirements: [] });
+      await saveRegistry(reg);
+    }
+    return reg;
+  });
+});
+
+ipcMain.handle('remove-audit-control-app', async (_event, auditId: string, controlId: string, appId: string) => {
+  validateName(auditId, 'Audit ID');
+  validateName(controlId, 'Control ID');
+  validateName(appId, 'Application ID');
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const audit = reg.audits.find(a => a.id === auditId);
+    if (!audit) throw new Error(`Audit "${auditId}" not found`);
+    audit.controlApps = audit.controlApps.filter(ca => !(ca.controlId === controlId && ca.appId === appId));
+    await saveRegistry(reg);
+    return reg;
   });
 });
 
@@ -272,34 +395,36 @@ ipcMain.handle('save-db-config', async (_event, auditName: string, controlId: st
 // IPC Handlers - Evidence Requirements
 // =================================
 
-ipcMain.handle('add-requirement', async (_event, auditName: string, controlId: string, appId: string, label: string, type: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('add-requirement', async (_event, auditId: string, controlId: string, appId: string, label: string, type: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
-  return serialized(auditName, async () => {
-    const metaPath = auditMetaPath(auditName);
-    const audit = await readJson<AuditMeta>(metaPath, emptyAudit(auditName));
-    const application = findApp(audit, controlId, appId);
-    if (!application) throw new Error(`Application ${appId} not found`);
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const audit = reg.audits.find(a => a.id === auditId);
+    if (!audit) throw new Error(`Audit "${auditId}" not found`);
+    const ca = audit.controlApps.find(ca => ca.controlId === controlId && ca.appId === appId);
+    if (!ca) throw new Error(`Control+App pair not found in audit`);
     const id = `req-${Date.now()}`;
-    application.evidenceRequirements.push({ id, label, type: type as 'screenshot' | 'db-query' | 'file' });
-    await writeJson(metaPath, audit);
-    return audit;
+    ca.evidenceRequirements.push({ id, label, type: type as 'screenshot' | 'db-query' | 'file' });
+    await saveRegistry(reg);
+    return reg;
   });
 });
 
-ipcMain.handle('remove-requirement', async (_event, auditName: string, controlId: string, appId: string, requirementId: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('remove-requirement', async (_event, auditId: string, controlId: string, appId: string, requirementId: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
-  return serialized(auditName, async () => {
-    const metaPath = auditMetaPath(auditName);
-    const audit = await readJson<AuditMeta>(metaPath, emptyAudit(auditName));
-    const application = findApp(audit, controlId, appId);
-    if (!application) throw new Error(`Application ${appId} not found`);
-    application.evidenceRequirements = application.evidenceRequirements.filter(r => r.id !== requirementId);
-    await writeJson(metaPath, audit);
-    return audit;
+  return serialized('registry', async () => {
+    const reg = await loadRegistry();
+    const audit = reg.audits.find(a => a.id === auditId);
+    if (!audit) throw new Error(`Audit "${auditId}" not found`);
+    const ca = audit.controlApps.find(ca => ca.controlId === controlId && ca.appId === appId);
+    if (!ca) throw new Error(`Control+App pair not found in audit`);
+    ca.evidenceRequirements = ca.evidenceRequirements.filter(r => r.id !== requirementId);
+    await saveRegistry(reg);
+    return reg;
   });
 });
 
@@ -307,11 +432,11 @@ ipcMain.handle('remove-requirement', async (_event, auditName: string, controlId
 // IPC Handlers - Evidence
 // =========================
 
-ipcMain.handle('capture-screenshot', async (_event, auditName: string, controlId: string, appId: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('capture-screenshot', async (_event, auditId: string, controlId: string, appId: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
-  const dir = evidenceDir(auditName, controlId, appId);
+  const dir = evidenceDir(auditId, controlId, appId);
   await ensureDir(dir);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `screenshot-${timestamp}.png`;
@@ -319,8 +444,8 @@ ipcMain.handle('capture-screenshot', async (_event, auditName: string, controlId
   return { filename, timestamp: new Date().toISOString() };
 });
 
-ipcMain.handle('import-file', async (_event, auditName: string, controlId: string, appId: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('import-file', async (_event, auditId: string, controlId: string, appId: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
   const result = await dialog.showOpenDialog({ properties: ['openFile'] });
@@ -329,21 +454,27 @@ ipcMain.handle('import-file', async (_event, auditName: string, controlId: strin
   const originalName = path.basename(sourcePath).replace(/[^a-zA-Z0-9._\-]/g, '_');
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `file-${timestamp}-${originalName}`;
-  const dir = evidenceDir(auditName, controlId, appId);
+  const dir = evidenceDir(auditId, controlId, appId);
   await ensureDir(dir);
   await fs.copyFile(sourcePath, path.join(dir, filename));
   return { filename, timestamp: new Date().toISOString() };
 });
 
-ipcMain.handle('list-evidence', async (_event, auditName: string, controlId: string, appId: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('list-evidence', async (_event, auditId: string, controlId: string, appId: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
-  const dir = evidenceDir(auditName, controlId, appId);
+  const dir = evidenceDir(auditId, controlId, appId);
   if (!existsSync(dir)) return [];
   const allFiles = await fs.readdir(dir);
+  const archivedSet = new Set(
+    allFiles.filter(f => f.endsWith('.archived')).map(f => f.replace('.archived', ''))
+  );
   const results = [];
   for (const filename of allFiles.sort()) {
+    if (filename.endsWith('.archived')) continue;
+    if (archivedSet.has(filename)) continue;
+
     const filePath = path.join(dir, filename);
     const stat = await fs.stat(filePath);
     let type: 'screenshot' | 'db-query' | 'file';
@@ -355,27 +486,22 @@ ipcMain.handle('list-evidence', async (_event, auditName: string, controlId: str
       type = 'screenshot';
     } else if (filename.startsWith('db-query-') && filename.endsWith('.csv')) {
       type = 'db-query';
-      // Read paired .txt file for query text
       const txtPath = path.join(dir, filename.replace('.csv', '.txt'));
       try { query = await fs.readFile(txtPath, 'utf-8'); } catch { /* ok */ }
-      // Count CSV data rows (total lines minus header)
       try {
         const csv = await fs.readFile(filePath, 'utf-8');
         const lines = csv.split('\n').filter(l => l.trim());
         rowCount = Math.max(0, lines.length - 1);
       } catch { /* ok */ }
     } else if (filename.startsWith('file-')) {
-      // Skip note sidecars
       if (filename.endsWith('.json')) continue;
       type = 'file';
       const parts = filename.match(/^file-[^-]+-(.+)$/);
       originalName = parts ? parts[1] : filename;
     } else {
-      // Skip sidecar .json, .txt, and other non-evidence files
       continue;
     }
 
-    // Read note sidecar
     let noteSidecar: string;
     if (type === 'screenshot') {
       noteSidecar = path.join(dir, filename.replace('.png', '.json'));
@@ -401,12 +527,12 @@ ipcMain.handle('list-evidence', async (_event, auditName: string, controlId: str
   return results;
 });
 
-ipcMain.handle('save-note', async (_event, auditName: string, controlId: string, appId: string, filename: string, note: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('save-note', async (_event, auditId: string, controlId: string, appId: string, filename: string, note: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
   validateName(filename, 'Filename');
-  const dir = evidenceDir(auditName, controlId, appId);
+  const dir = evidenceDir(auditId, controlId, appId);
   let notePath: string;
   if (filename.startsWith('screenshot-')) {
     notePath = path.join(dir, filename.replace('.png', '.json'));
@@ -418,32 +544,100 @@ ipcMain.handle('save-note', async (_event, auditName: string, controlId: string,
   await writeJson(notePath, { note, updatedAt: new Date().toISOString() });
 });
 
-ipcMain.handle('delete-evidence', async (_event, auditName: string, controlId: string, appId: string, filename: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('archive-evidence', async (_event, auditId: string, controlId: string, appId: string, filename: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
   validateName(filename, 'Filename');
-  const dir = evidenceDir(auditName, controlId, appId);
-  const filePath = path.join(dir, filename);
-  try { await fs.unlink(filePath); } catch { /* already gone */ }
-  // Clean up associated files
-  if (filename.startsWith('screenshot-')) {
-    try { await fs.unlink(path.join(dir, filename.replace('.png', '.json'))); } catch { /* ok */ }
-  } else if (filename.startsWith('db-query-')) {
-    // Delete paired .txt and .note.json
-    try { await fs.unlink(path.join(dir, filename.replace('.csv', '.txt'))); } catch { /* ok */ }
-    try { await fs.unlink(path.join(dir, filename.replace('.csv', '.note.json'))); } catch { /* ok */ }
-  } else {
-    try { await fs.unlink(path.join(dir, filename + '.json')); } catch { /* ok */ }
-  }
+  const dir = evidenceDir(auditId, controlId, appId);
+  const markerPath = path.join(dir, filename + '.archived');
+  await fs.writeFile(markerPath, new Date().toISOString());
 });
 
-ipcMain.handle('get-evidence-path', async (_event, auditName: string, controlId: string, appId: string, filename: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('get-evidence-path', async (_event, auditId: string, controlId: string, appId: string, filename: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
   validateName(filename, 'Filename');
-  return path.join(evidenceDir(auditName, controlId, appId), filename);
+  return path.join(evidenceDir(auditId, controlId, appId), filename);
+});
+
+ipcMain.handle('list-all-evidence-for-app', async (_event, appId: string) => {
+  validateName(appId, 'Application ID');
+  if (!existsSync(EVIDENCE_DIR)) return [];
+  const results: { auditId: string; controlId: string; items: unknown[] }[] = [];
+  const auditDirs = await fs.readdir(EVIDENCE_DIR, { withFileTypes: true });
+  for (const auditEntry of auditDirs) {
+    if (!auditEntry.isDirectory()) continue;
+    const auditPath = path.join(EVIDENCE_DIR, auditEntry.name);
+    const controlDirs = await fs.readdir(auditPath, { withFileTypes: true });
+    for (const controlEntry of controlDirs) {
+      if (!controlEntry.isDirectory()) continue;
+      const appDir = path.join(auditPath, controlEntry.name, appId);
+      if (!existsSync(appDir)) continue;
+      const allFiles = await fs.readdir(appDir);
+      const archivedSet = new Set(
+        allFiles.filter(f => f.endsWith('.archived')).map(f => f.replace('.archived', ''))
+      );
+      const items = [];
+      for (const filename of allFiles.sort()) {
+        if (filename.endsWith('.archived')) continue;
+        if (archivedSet.has(filename)) continue;
+        const filePath = path.join(appDir, filename);
+        const stat = await fs.stat(filePath);
+        let type: 'screenshot' | 'db-query' | 'file';
+        let query: string | undefined;
+        let rowCount: number | undefined;
+        let originalName: string | undefined;
+
+        if (filename.startsWith('screenshot-') && filename.endsWith('.png')) {
+          type = 'screenshot';
+        } else if (filename.startsWith('db-query-') && filename.endsWith('.csv')) {
+          type = 'db-query';
+          const txtPath = path.join(appDir, filename.replace('.csv', '.txt'));
+          try { query = await fs.readFile(txtPath, 'utf-8'); } catch { /* ok */ }
+          try {
+            const csv = await fs.readFile(filePath, 'utf-8');
+            const lines = csv.split('\n').filter(l => l.trim());
+            rowCount = Math.max(0, lines.length - 1);
+          } catch { /* ok */ }
+        } else if (filename.startsWith('file-')) {
+          if (filename.endsWith('.json')) continue;
+          type = 'file';
+          const parts = filename.match(/^file-[^-]+-(.+)$/);
+          originalName = parts ? parts[1] : filename;
+        } else {
+          continue;
+        }
+
+        let noteSidecar: string;
+        if (type === 'screenshot') {
+          noteSidecar = path.join(appDir, filename.replace('.png', '.json'));
+        } else if (type === 'db-query') {
+          noteSidecar = path.join(appDir, filename.replace('.csv', '.note.json'));
+        } else {
+          noteSidecar = path.join(appDir, filename + '.json');
+        }
+        const noteData = await readJson<{ note?: string }>(noteSidecar, {});
+
+        items.push({
+          filename,
+          timestamp: stat.mtime.toISOString(),
+          note: noteData.note || '',
+          path: filePath,
+          type,
+          query,
+          rowCount,
+          originalName,
+          fileSize: stat.size,
+        });
+      }
+      if (items.length > 0) {
+        results.push({ auditId: auditEntry.name, controlId: controlEntry.name, items });
+      }
+    }
+  }
+  return results;
 });
 
 // =========================
@@ -454,20 +648,18 @@ ipcMain.handle('test-db-connection', async (_event, config: DbConnectionConfig) 
   return testConnection(config);
 });
 
-ipcMain.handle('run-db-query', async (_event, auditName: string, controlId: string, appId: string, config: DbConnectionConfig, query: string) => {
-  validateName(auditName, 'Audit name');
+ipcMain.handle('run-db-query', async (_event, auditId: string, controlId: string, appId: string, config: DbConnectionConfig, query: string) => {
+  validateName(auditId, 'Audit ID');
   validateName(controlId, 'Control ID');
   validateName(appId, 'Application ID');
-  const dir = evidenceDir(auditName, controlId, appId);
+  const dir = evidenceDir(auditId, controlId, appId);
   await ensureDir(dir);
   const result = await runQuery(config, query);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const baseName = `db-query-${timestamp}`;
 
-  // Save query as .txt
   await fs.writeFile(path.join(dir, `${baseName}.txt`), query, 'utf-8');
 
-  // Save results as .csv
   const csvLines: string[] = [];
   if (result.columns.length > 0) {
     csvLines.push(result.columns.map(csvEscape).join(','));
@@ -485,13 +677,13 @@ ipcMain.handle('run-db-query', async (_event, auditName: string, controlId: stri
 // IPC Handlers - Export
 // =========================
 
-ipcMain.handle('export-audit', async (_event, auditName: string) => {
-  validateName(auditName, 'Audit name');
-  const auditDir = path.join(NAUGHTITOR_DIR, auditName);
-  if (!existsSync(auditDir)) throw new Error('Audit not found');
+ipcMain.handle('export-audit', async (_event, auditId: string) => {
+  validateName(auditId, 'Audit ID');
+  const auditDir = path.join(EVIDENCE_DIR, auditId);
+  if (!existsSync(auditDir)) throw new Error('Audit evidence directory not found');
 
   const result = await dialog.showSaveDialog({
-    defaultPath: `${auditName}.zip`,
+    defaultPath: `${auditId}.zip`,
     filters: [{ name: 'ZIP Archive', extensions: ['zip'] }],
   });
   if (result.canceled || !result.filePath) return null;
@@ -502,7 +694,7 @@ ipcMain.handle('export-audit', async (_event, auditName: string) => {
     output.on('close', () => resolve(result.filePath!));
     archive.on('error', reject);
     archive.pipe(output);
-    archive.directory(auditDir, auditName);
+    archive.directory(auditDir, auditId);
     archive.finalize();
   });
 });

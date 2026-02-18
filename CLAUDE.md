@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-Cross-platform (macOS/Windows) Electron desktop app for SOX audit evidence collection. Auditors organize evidence by **Audit → Control → Application**, capturing screenshots, running live database queries, and importing files as evidence.
+Cross-platform (macOS/Windows) Electron desktop app for **system documentation and SOX audit evidence collection**. Three independent top-level entities: **Applications** (rich metadata), **Controls** (SOX controls linked to apps), and **Audits** (periodic evidence collection periods). Three navigation views plus a home dashboard.
 
 **Status:** Feature-complete. Builds and launches successfully. No tests yet.
 
@@ -17,7 +17,7 @@ Cross-platform (macOS/Windows) Electron desktop app for SOX audit evidence colle
 | Databases | `mysql2` (MySQL), `mssql` (MS SQL), `odbc` (Progress OpenEdge) |
 | Export | `archiver` (ZIP) |
 | Packaging | `electron-builder` (DMG on Mac, NSIS on Windows) |
-| State mgmt | React hooks only (`useAuditStore` custom hook) |
+| State mgmt | React hooks only (`useRegistryStore` + `useEvidenceStore`) |
 
 ## Commands
 
@@ -40,19 +40,24 @@ electron/
   database.ts      DB connections: MySQL, MSSQL, OpenEdge (ODBC)
   types.d.ts       Declaration for screenshot-desktop
 src/
-  App.tsx          Root: AuditSelector or sidebar + main content layout
+  App.tsx          Root: NavBar + view routing (home/applications/controls/audits)
   index.tsx        React entry point
   index.html       Shell with CSP header
   components/
-    AuditSelector     Create/open audits
-    ControlList       Add/remove SOX controls
-    ApplicationList   Add/remove applications under a control
+    NavBar            Top-level navigation: Home, Applications, Controls, Audits
+    HomeView          Landing page with summary cards
+    ApplicationsView  App list + detail panel (metadata form, evidence history tab)
+    ControlsView      Control list + detail (description, linked apps picker)
+    AuditsView        Audit list + create
+    AuditWorkspace    Audit scope tree + evidence collection workspace
+    ArchiveToggle     Shared archive toggle widget
     EvidenceViewer    Evidence grid + requirements checklist + hotkey
     EvidenceActions   Buttons: Screenshot, DB Query, Import File
     EvidenceCard      Renders any evidence type (screenshot/query/file)
     DbQueryDialog     Modal: DB connection config, SQL editor, results table
   store/
-    auditStore.ts  State: currentAudit, selectedControl, selectedApplication, evidence
+    registryStore.ts  State: Registry (apps, controls, audits), all CRUD operations
+    evidenceStore.ts  State: evidence items for a given (audit, control, app) triple
   types/
     index.ts       All TypeScript types + NaughtitorAPI + global Window decl
   styles/
@@ -60,36 +65,40 @@ src/
 build.mjs          esbuild config + static file copy
 ```
 
-**Data hierarchy:** Audit → Control → Application → Evidence Items
+**Data model:** Three independent entities linked via IDs:
+- `AppRecord` - rich application metadata (auth, environment, DB config, etc.)
+- `ControlRecord` - SOX control with `appIds[]` (many-to-many link to apps)
+- `AuditRecord` - audit period with `controlApps[]` (which control+app pairs are in scope)
 
 **Data storage:**
 ```
-~/Naughtitor/<audit-name>/
-  audit.json                              # { name, controls[{ applications[{ evidenceRequirements[] }] }] }
-  <control-id>/
-    <app-id>/
-      screenshot-<ts>.png                 # Screenshot files
-      screenshot-<ts>.json                # Note sidecar
-      db-query-<ts>.txt                   # SQL query text
-      db-query-<ts>.csv                   # Query results as CSV
-      db-query-<ts>.note.json             # Note sidecar for query
-      file-<ts>-<original-name>           # Imported file (any type)
-      file-<ts>-<original-name>.json      # Note sidecar for file
+~/Naughtitor/
+  registry.json                          # Single source of truth for all entities
+  evidence/
+    <audit-id>/
+      <control-id>/
+        <app-id>/
+          screenshot-<ts>.png / .json    # Screenshot + note sidecar
+          db-query-<ts>.txt / .csv / .note.json  # Query text, results, note
+          file-<ts>-<name> / .json       # Imported file + note sidecar
+          <filename>.archived            # Soft-delete marker sidecar
 ```
+
+**Archive mechanism:** Entities have `archived: boolean` flag in registry.json. Evidence uses `.archived` marker files. Archived items hidden by default, shown via toggle.
 
 ## Code Style & Conventions
 
 - **Indentation:** 2 spaces
 - **Quotes:** Single quotes
 - **Semicolons:** Yes
-- **File naming:** PascalCase for components (`AuditSelector.tsx`), camelCase for modules (`auditStore.ts`)
+- **File naming:** PascalCase for components (`ApplicationsView.tsx`), camelCase for modules (`registryStore.ts`)
 - **Variables/functions:** camelCase
-- **Types/interfaces:** PascalCase (`AuditMeta`, `EvidenceItem`)
+- **Types/interfaces:** PascalCase (`AppRecord`, `EvidenceItem`)
 - **Constants:** SCREAMING_SNAKE_CASE (`NAUGHTITOR_DIR`)
 - **Component props:** Always `interface Props` (not exported)
 - **Exports:** Named exports (`export function App()`)
 - **React:** Functional components + hooks only, no class components
-- **IPC safety:** All user inputs validated via `validateName()`, all JSON reads via `readJson()` with fallback, all audit.json writes serialized via write queue
+- **IPC safety:** All user inputs validated via `validateName()`, all JSON reads via `readJson()` with fallback, all registry.json writes serialized via write queue
 - **No linter/formatter configured** (no ESLint, Prettier)
 
 ## Known Bugs
@@ -99,7 +108,7 @@ None currently tracked.
 ## Next TODOs
 
 - [ ] **Tests** - No test framework set up yet. Need:
-  - Unit tests for IPC handlers (file operations, JSON read/write)
+  - Unit tests for IPC handlers (registry CRUD, evidence operations)
   - Component tests for React UI
   - Framework: Vitest recommended (fast, TS-native)
 - [ ] **Lightbox** - Click screenshot thumbnail to view full-size
@@ -113,31 +122,41 @@ None currently tracked.
 No test framework exists. When added, these scenarios need coverage:
 
 **Electron IPC (unit):**
-- Create audit → creates directory + audit.json
-- Add control → creates subdirectory, updates audit.json with `applications: []`
-- Add application → creates subdirectory under control, updates audit.json
-- Capture screenshot → writes PNG to `<control>/<app>/` folder
+- Create app → adds to registry.json with full metadata
+- Update app → modifies fields in registry.json
+- Archive app → sets archived flag in registry.json
+- Create control → adds to registry.json with empty appIds
+- Link/unlink app to control → updates appIds array
+- Create audit → adds to registry.json with slugified ID
+- Add/remove audit control-app → updates controlApps array
+- Capture screenshot → writes PNG to evidence/<audit>/<control>/<app>/
 - Import file → copies file to evidence dir with sanitized name
-- Run DB query → connects to DB, saves result JSON to evidence dir
+- Run DB query → connects to DB, saves CSV + TXT to evidence dir
 - Test DB connection → validates credentials without saving
 - Save/read notes → JSON sidecar files (different paths per evidence type)
-- Evidence requirements → add/remove in audit.json, fulfilled check
-- Export → creates valid ZIP with nested directory structure
+- Evidence requirements → add/remove in audit controlApps entry
+- Archive evidence → writes .archived marker sidecar
+- List evidence → excludes files with .archived markers
+- List all evidence for app → scans across all audit dirs
+- Export → creates valid ZIP from evidence/<audit-id>/ directory
 - Path traversal attempts rejected by validateName
 - Concurrent writes serialize correctly (write queue)
 - Invalid characters in names throw descriptive errors
 
 **React components (unit/integration):**
-- AuditSelector: create new audit, open existing audit
-- ControlList: add/remove control, select highlights
-- ApplicationList: add/remove application, auto-generates safe ID from name
+- HomeView: summary cards, navigation links
+- ApplicationsView: create/edit app, metadata form, evidence history tab
+- ControlsView: create control, link/unlink apps
+- AuditsView: create audit, select opens workspace
+- AuditWorkspace: add/remove scope, evidence collection
 - EvidenceViewer: displays all evidence types, requirements checklist
 - EvidenceActions: screenshot/query/file buttons with loading states
-- EvidenceCard: renders screenshot vs query vs file differently, note editing
+- EvidenceCard: renders screenshot vs query vs file differently, note editing, archive
 - DbQueryDialog: connection config form, test connection, run query, results table
 
 **E2E:**
-- Full flow: create audit → add control → add application → capture screenshot → annotate → export ZIP
+- Full flow: create app → create control → link app → create audit → add scope → collect evidence → export ZIP
 - DB query flow: configure connection → test → run query → save results as evidence
 - File import flow: open dialog → select file → file copied to evidence dir
-- Hotkey capture (Ctrl+Shift+S) triggers screenshot when application is selected
+- Hotkey capture (Ctrl+Shift+S) triggers screenshot when app is selected
+- Archive flow: archive evidence → verify hidden → toggle show archived → verify visible
